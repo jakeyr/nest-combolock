@@ -66,7 +66,11 @@ def lock_is_open(combo, tumbler):
     # cut the list down to only the numbers that are "edges", 
     # i.e. numbers where the lock changed direction
     #
-    # also add in the final digit because we may have stopped on that one
+    # on a traditional lock, you enter the combination and then 
+    # attempt to open the lock to see if the final digit is correct. 
+    # since there is no explicit “open” command in this case, tack 
+    # on the final number (which represents the current setting of 
+    # the Nest) before checking to see if we have a match.
     check = [x[1] for x in window(tumbler,3) if max(x) == x[1] or min(x) == x[1]] + [final]
 
     _LOGGER.info("check list is {0}".format(check))
