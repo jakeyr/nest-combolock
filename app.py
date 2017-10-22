@@ -106,12 +106,14 @@ async def get_data_stream(session, loop, token, api_endpoint):
     response = http.request('GET', api_endpoint, headers=headers, preload_content=False)
     client   = sseclient.SSEClient(response)
 
-    for event in client.events(): # returns a generator
+    # loop over the generator indefinitely and handle the incoming events
+    for event in client.events(): 
         event_type = event.event
         
         _LOGGER.debug("event: {0}".format(event_type))
         
-        if event_type == 'open': # not always received here 
+        # most of these events don't matter to us
+        if event_type == 'open':
             _LOGGER.info("The event stream has been opened")
         elif event_type == 'keep-alive':
             _LOGGER.info("No data updates. Receiving an HTTP header to keep the connection open.")
@@ -121,11 +123,14 @@ async def get_data_stream(session, loop, token, api_endpoint):
         elif event_type == 'error':
             _LOGGER.error("Error occurred, such as connection closed.")
             _LOGGER.error("error message: ", event.data)
+
+        # ok, this is the event we care about
         elif event_type == 'put':
             _LOGGER.debug("The data has changed (or initial data sent)")
 
             data = json.loads(event.data)    
 
+            # put the new value into the tumbler
             tumbler.append(data["data"])        
 
             _LOGGER.info("Tumbler is now {0}".format(tumbler))
@@ -137,6 +142,7 @@ async def get_data_stream(session, loop, token, api_endpoint):
 
                 _LOGGER.info("Lock unlocked!")
 
+                # make an HTTP request to Alarm.com to disarm the alarm
                 adc = pyalarmdotcom.Alarmdotcom(ADC_USER,ADC_PASS,session,loop)
                 await adc.async_login()
                 await adc.async_alarm_disarm()
