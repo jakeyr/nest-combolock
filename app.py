@@ -53,9 +53,8 @@ def lock_is_open(combo, tumbler):
     
     # remove the last number as that 
     final = tumbler[-1]
-    rest  = tumbler[:-1]
     
-    check = [x[1] for x in window(rest,3) if max(x) == x[1] or min(x) == x[1]] + [final]
+    check = [x[1] for x in window(tumbler,3) if max(x) == x[1] or min(x) == x[1]] + [final]
     _LOGGER.info("check list is {0}".format(check))
     check = [x for x in window(check,len(combo))]
     found = (tuple(combo) in check)
