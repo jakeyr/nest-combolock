@@ -5,9 +5,15 @@ import json
 import pprint
 import collections
 import os
+import aiohttp
+import asyncio
+import pyalarmdotcom
+import logging
 
 from itertools import islice
 
+
+_LOGGER = logging.getLogger(__name__)
 
 # try:
 #     import http.client as http_client
@@ -24,8 +30,8 @@ NEST_API_URL  = 'https://developer-api.nest.com/devices/thermostats/{0}/target_t
 
 COMBINATION   = list(json.loads(os.environ.get("COMBINATION")))
 ALWAYS_UNLOCK = os.environ.get('ALWAYS_UNLOCK',False)
-WEBHOOK_DATA  = json.loads(os.environ.get('WEBHOOK_DATA'))
-WEBHOOK_URL   = os.environ.get('WEBHOOK_URL')
+ADC_USER = os.environ.get('ALARMDOTCOM_USERNAME')
+ADC_PASS = os.environ.get('ALARMDOTCOM_PASSWORD')
 
 TUMBLER_STOP_INTERVAL = float(os.environ.get('TUMBLER_STOP_INTERVAL',1.5))
 
@@ -40,17 +46,23 @@ def window(seq, n=2):
         result = result[1:] + (elem,)
         yield result
 
+def new_tumbler():
+    return collections.deque(20*[0],20)
+
 def lock_is_open(combo, tumbler):
+    
+    # remove the last number as that 
     final = tumbler[-1]
     rest  = tumbler[:-1]
+    
     check = [x[1] for x in window(rest,3) if max(x) == x[1] or min(x) == x[1]] + [final]
+    _LOGGER.info("check list is {0}".format(check))
     check = [x for x in window(check,len(combo))]
-    print "check list is {0}".format(check)
     found = (tuple(combo) in check)
-    print "found {0} in {1}?: ${2}".format(combo,check,found)
+    _LOGGER.debug("found {0} in {1}?: ${2}".format(combo,check,found))
     return found
 
-def get_data_stream(token, api_endpoint):
+async def get_data_stream(session, loop, token, api_endpoint):
     """ Start REST streaming device events given a Nest token.  """
     headers = {
         'Authorization': "Bearer {0}".format(token),
@@ -67,36 +79,52 @@ def get_data_stream(token, api_endpoint):
 
     client = sseclient.SSEClient(response)
 
-    tumbler = collections.deque(20*[0],20)
+    tumbler = new_tumbler()
 
     for event in client.events(): # returns a generator
         event_type = event.event
         
-        print "event: ", event_type
+        _LOGGER.debug("event: {0}".format(event_type))
         
         if event_type == 'open': # not always received here 
-            print "The event stream has been opened"
+            _LOGGER.info("The event stream has been opened")
         elif event_type == 'put':
-            print "The data has changed (or initial data sent)"
+            _LOGGER.debug("The data has changed (or initial data sent)")
 
             data = json.loads(event.data)    
 
             tumbler.append(data["data"])        
 
-            if (lock_is_open(COMBINATION, list(tumbler)) or ALWAYS_UNLOCK):
-                print "Lock unlocked!"
-                r = http.request('POST', WEBHOOK_URL, fields=WEBHOOK_DATA)
-                print r.status
-        
-        elif event_type == 'keep-alive':
-            print "No data updates. Receiving an HTTP header to keep the connection open."
-        elif event_type == 'auth_revoked':
-            print "The API authorization has been revoked."
-            print "revoked token: ", event.data
-        elif event_type == 'error':
-            print "Error occurred, such as connection closed."
-            print "error message: ", event.data
-        else:
-            print "Unknown event, no handler for it."
+            _LOGGER.info("Tumbler is now {0}".format(tumbler))
 
-get_data_stream(TOKEN, NEST_API_URL)
+            if (lock_is_open(COMBINATION, list(tumbler)) or ALWAYS_UNLOCK):
+
+                # zero out the tumbler
+                tumbler = new_tumbler()
+
+                _LOGGER.info("Lock unlocked!")
+
+                adc = pyalarmdotcom.Alarmdotcom(ADC_USER,ADC_PASS,session,loop)
+                await adc.async_login()
+                await adc.async_alarm_disarm()
+
+        elif event_type == 'keep-alive':
+            _LOGGER.info("No data updates. Receiving an HTTP header to keep the connection open.")
+        elif event_type == 'auth_revoked':
+            _LOGGER.error("The API authorization has been revoked.")
+            _LOGGER.error("revoked token: ", event.data)
+        elif event_type == 'error':
+            _LOGGER.error("Error occurred, such as connection closed.")
+            _LOGGER.error("error message: ", event.data)
+        else:
+            _LOGGER.error("Unknown event, no handler for it.")
+
+async def main(loop):
+    level =  logging.DEBUG if os.environ.get('DEBUG',False) else logging.INFO
+    logging.basicConfig(level=level, format='%(relativeCreated)6d %(threadName)s %(message)s')
+    async with aiohttp.ClientSession() as session:
+        await get_data_stream(session, loop, TOKEN, NEST_API_URL)
+
+if __name__ == '__main__':
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main(loop))

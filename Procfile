@@ -1,1 +1,1 @@
-app: python -u app.py
+app: python3 -u app.py
